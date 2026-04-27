@@ -119,6 +119,8 @@ scan execution by creating `diki-run` Jobs in the shoot's control-plane namespac
 The `diki-run` Pod writes summary reports back to the `ComplianceScan` status
 and exports detailed reports to the configured report outputs.
 
+![Diki service](diki-service.png)
+
 ### Notes/Constraints/Caveats
 
 - diki-operator is under active development. The
@@ -323,7 +325,7 @@ resources are retained.
 
 ### Components
 
-The extension is composed of four components with distinct responsibilities:
+![Sequence diagram](sequence-diag.png)
 
 #### diki-extension-controller
 
