@@ -28,6 +28,7 @@
   - [Drawbacks](#drawbacks)
   - [Alternatives](#alternatives)
     - [Central Compliance Service in a Dedicated Cluster](#central-compliance-service-in-a-dedicated-cluster)
+    - [Trivy Operator for Compliance Scanning](#trivy-operator-for-compliance-scanning)
 
 ## Summary
 
@@ -37,7 +38,7 @@ the [DISA Kubernetes STIG](https://public.cyber.mil/stigs/). Today, Gardener
 users must install and operate the Diki CLI themselves — scheduling scans,
 managing configuration, and collecting reports manually.
 
-This GEP proposes a new Gardener extension, `shoot-diki-service`, that deploys
+This GEP proposes a new Gardener extension, `gardener-extension-diki`, that deploys
 the [diki-operator](https://github.com/gardener/diki-operator) into shoot
 cluster control planes. The operator introduces three Custom Resource
 Definitions — `ComplianceScan`, `ReportOutput`, and `ScheduledComplianceScan` —
@@ -73,8 +74,8 @@ Kubernetes resource semantics.
 
 ### Goals
 
--  Introduce `gardener-extension-shoot-diki-service` as a Gardener extension
-   that deploys the diki-operator into shoot control planes on seeds.
+-  Introduce `gardener-extension-diki` as a Gardener extension
+   that deploys the `diki-operator` into shoot control planes on seeds.
 -  Allow shoot users to run on-demand compliance scans by creating a
    `ComplianceScan` custom resource in their shoot cluster.
 -  Allow shoot users to schedule recurring compliance scans via a
@@ -89,9 +90,8 @@ Kubernetes resource semantics.
 
 -  Remediation of compliance findings. Diki is a detective tool, it reports
    non-compliance but does not modify cluster resources to fix findings.
--  API for exposing available Diki or ruleset versions to users.
 -  Deploying or managing persistent storage backends for reports (e.g.,
-   PostgreSQL, OpenSearch, ODG). The diki-operator will support exporting
+   PostgreSQL, OpenSearch, ODG). The `diki-operator` will support exporting
    reports to such storage, but provisioning and operating the storage itself is
    out of scope.
 -  Integration with the Gardener Dashboard.
@@ -99,12 +99,12 @@ Kubernetes resource semantics.
 
 ## Proposal
 
-Introduce `gardener-extension-shoot-diki-service` as a new extension in the
+Introduce `gardener-extension-diki` as a new extension in the
 Gardener GitHub organization. The extension follows the
 [Gardener Extension Concept](https://gardener.cloud/docs/gardener/extensions/overview/)
 and implements the `Extension` reconciler contract.
 
-When enabled on a Shoot via `spec.extensions[].type: shoot-diki-service`, the
+When enabled on a Shoot via `spec.extensions[].type: diki`, the
 extension:
 
 1. Deploys the `diki-operator` into the shoot's namespace on the seed.
@@ -113,7 +113,7 @@ extension:
    via `ManagedResource`.
 
 Users interact exclusively through the shoot API server — creating
-`ComplianceScan` or `ScheduledComplianceScan` resources. The diki-operator in
+`ComplianceScan` or `ScheduledComplianceScan` resources. The `diki-operator` in
 the seed watches these resources (via the shoot API server) and orchestrates
 scan execution by creating `diki-run` Jobs in the shoot's control-plane namespace.
 The `diki-run` Pod writes summary reports back to the `ComplianceScan` status
@@ -123,7 +123,7 @@ and exports detailed reports to the configured report outputs.
 
 ### Notes/Constraints/Caveats
 
-- diki-operator is under active development. The
+- `diki-operator` is under active development. The
   [diki-operator repository](https://github.com/gardener/diki-operator) is in
   early development. API shapes and component boundaries described in this GEP
   may change as the implementation matures. The GEP captures the target design.
@@ -141,9 +141,9 @@ and exports detailed reports to the configured report outputs.
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|------------|
-| diki-operator API changes during development | High | Medium | The extension will track the operator's API as it stabilizes. CRD versioning (`v1alpha1`) signals instability to users. |
-| Scan Jobs consume excessive seed resources | Medium | Medium | The diki-operator creates one `diki-run` Job per scan. `ScheduledComplianceScan` history limits (`successfulScansHistoryLimit`, `failedScansHistoryLimit`) bound the number of retained scan resources. Concurrent Jobs can be limited. |
-| CRDs in shoot clusters add API surface users may not expect | Low | Low | CRDs are only installed when the extension is explicitly enabled on the shoot. The extension is opt-in. |
+| `diki-operator` API changes during development | High | Medium | The extension will track the operator's API as it stabilizes. CRD versioning (`v1alpha1`) signals instability to users. |
+| Scan Jobs consume excessive seed resources | Medium | Low | The `diki-operator` creates one `diki-run` Job per scan. `ScheduledComplianceScan` history limits (`successfulScansHistoryLimit`, `failedScansHistoryLimit`) bound the number of retained scan resources. Concurrent Jobs can be limited. |
+| CRDs in shoot clusters add API surface users may not expect | Low | Low | CRDs are only installed when the extension is explicitly enabled on the shoot. |
 
 ## Design Details
 
@@ -156,7 +156,7 @@ The extension is registered via `ControllerDeployment` and
 apiVersion: core.gardener.cloud/v1beta1
 kind: ControllerDeployment
 metadata:
-  name: gardener-extension-shoot-diki-service
+  name: gardener-extension-diki
 helm:
   rawChart: <base64-encoded Helm chart>
 ```
@@ -165,22 +165,22 @@ helm:
 apiVersion: core.gardener.cloud/v1beta1
 kind: ControllerRegistration
 metadata:
-  name: shoot-diki-service
+  name: diki
 spec:
   resources:
     - kind: Extension
-      type: shoot-diki-service
+      type: diki
       globallyEnabled: false
       lifecycle:
         reconcile: AfterKubeAPIServer
         delete: BeforeKubeAPIServer
   deployment:
     deploymentRefs:
-      - name: gardener-extension-shoot-diki-service
+      - name: gardener-extension-diki
 ```
 
 The extension controller is deployed per seed and watches `Extension` objects of
-type `shoot-diki-service`.
+type `diki`.
 
 Shoot owners enable the extension by adding it to their Shoot spec:
 
@@ -189,7 +189,7 @@ apiVersion: core.gardener.cloud/v1beta1
 kind: Shoot
 spec:
   extensions:
-  - type: shoot-diki-service
+  - type: diki
 ```
 
 ### API
@@ -269,7 +269,7 @@ supplied via `ConfigMap` references. The `spec.outputs` field references
 The `status` section is updated by the `diki-run` Job as the scan progresses.
 On completion, `status.rulesets[].results` contains per-ruleset summaries and
 lists of findings, and `status.outputs` contains references to the stored
-detailed reports. The diki-operator watches `ComplianceScan` status to track
+detailed reports. The `diki-operator` watches `ComplianceScan` status to track
 Job completion and manage the `ScheduledComplianceScan` lifecycle.
 
 #### ReportOutput
@@ -331,7 +331,7 @@ resources are retained.
 
 Runs on the seed as a standard Gardener extension controller. Responsibilities:
 
-- Watch `Extension` objects of type `shoot-diki-service`.
+- Watch `Extension` objects of type `diki`.
 - Deploy the `diki-operator` and `diki-admission-controller` into the shoot's
   seed namespace.
 - Apply CRDs, RBAC, and additional resources to the shoot cluster via
@@ -350,7 +350,7 @@ Runs in the shoot's seed namespace. Responsibilities:
 
 #### diki-admission-controller
 
-Runs as part of the diki-operator.
+Runs as part of the `diki-operator`.
 Responsibilities:
 
 - Validate `ComplianceScan`, `ReportOutput`, and `ScheduledComplianceScan`
@@ -358,7 +358,7 @@ Responsibilities:
 
 #### diki-run
 
-A `Job` created by the diki-operator in the shoot's seed namespace for each
+A `Job` created by the `diki-operator` in the shoot's seed namespace for each
 scan execution. The Job is responsible for running the Diki compliance scan,
 exporting detailed reports to the configured outputs, and writing summary
 results back to the `ComplianceScan` status. Structure:
@@ -416,8 +416,9 @@ references).
 
 | Phase | Behaviour |
 |-------|-----------|
-| Reconcile | Deploys diki-operator and diki-admission-controller to the shoot namespace on the seed. Creates a `ManagedResource` with CRDs, RBAC, and supporting resources for the shoot cluster. Waits for `ManagedResource` health before marking the `Extension` as reconciled. |
-| Delete | Deletes the diki-operator deployment and the `ManagedResource`. Waits for all managed objects to be removed from the shoot cluster before completing. |
+| Reconcile | Deploys `diki-operator` and diki-admission-controller to the shoot namespace on the seed. Creates a `ManagedResource` with CRDs, RBAC, and supporting resources for the shoot cluster. Waits for `ManagedResource` health before marking the `Extension` as reconciled. |
+| Delete | Deletes the `diki-operator` deployment and the `ManagedResource`. Waits for all managed objects to be removed from the shoot cluster before completing. |
+| Migrate | During a control-plane migration, running `ComplianceScan`s will be interrupted and marked as failed. The extension controller will recreate the `diki-operator` deployment on the new seed, and the operator will resume normal operation. Scheduled scans will continue to run on the new seed according to their schedule. |
 
 ## Future Enhancements
 
@@ -440,7 +441,7 @@ references).
 
 ## Drawbacks
 
-- Dependency on an in-development operator. The diki-operator is under
+- Dependency on an in-development operator. The `diki-operator` is under
   active development and its APIs are not yet stable. This can cause breaking
   changes across versions.
 
@@ -469,3 +470,24 @@ This approach was rejected because:
   compliance scanning.
 - It requires the central operator to obtain credentials for every
   target shoot.
+
+### Trivy Operator for Compliance Scanning
+
+Another alternative considered was leveraging the
+[Trivy Operator](https://github.com/aquasecurity/trivy-operator) — a
+Kubernetes-native security scanner that can perform CIS benchmark checks.
+Instead of building a custom extension around the `diki-operator`, the
+compliance scanning functionality could be delegated to Trivy Operator
+deployed into shoot clusters or their control planes.
+
+This approach was rejected because:
+
+- Diki implements Gardener-aware rules. The diki rulesets understand
+  Gardener-specific architecture (e.g., control plane on seed) and
+  can evaluate rules in this context. Trivy Operator treats every cluster
+  as a generic Kubernetes installation.
+- Trivy Operator does not support the DISA Kubernetes STIG ruleset.
+- No control over the upstream Trivy project. Diki is part of the Gardener
+  organization, giving the team full control over its development,
+  prioritization of Gardener-specific features, and long-term stability
+  guarantees.
