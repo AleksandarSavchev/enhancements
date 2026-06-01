@@ -20,9 +20,7 @@
     - [Components](#components)
       - [diki-extension-controller](#diki-extension-controller)
       - [diki-operator](#diki-operator)
-      - [diki-admission-controller](#diki-admission-controller)
       - [diki-run](#diki-run)
-    - [Architecture](#architecture)
     - [Lifecycle Management](#lifecycle-management)
   - [Future Enhancements](#future-enhancements)
   - [Drawbacks](#drawbacks)
@@ -96,7 +94,6 @@ Kubernetes resource semantics.
    out of scope.
 -  Integration with the Gardener Dashboard.
 
-
 ## Proposal
 
 Introduce `gardener-extension-diki` as a new extension in the
@@ -129,7 +126,11 @@ and exports detailed reports to the configured report outputs.
   may change as the implementation matures. The GEP captures the target design.
 
 - Scan execution happens on the seed, not in the shoot data plane. The
-  `diki-run` Job runs in the shoot's namespace on the seed.
+  `diki-run` Job runs in the shoot's namespace on the seed. It would need
+  a shoot access secret with the required
+  [RBAC permissions for a Diki scan](https://github.com/gardener/diki/blob/main/example/rbac/managedk8s.yaml).
+  Additional permissions/credentials would be required, depending on the
+  configured outputs (e.g., credentials to write to a PostgreSQL database).
 
 - Default rule options are provided by the extension. The extension ships
   default rule options for supported Diki rulesets so that users can run
@@ -153,12 +154,13 @@ The extension is registered via `ControllerDeployment` and
 `ControllerRegistration`:
 
 ```yaml
-apiVersion: core.gardener.cloud/v1beta1
+apiVersion: core.gardener.cloud/v1
 kind: ControllerDeployment
 metadata:
   name: gardener-extension-diki
 helm:
-  rawChart: <base64-encoded Helm chart>
+  ociRepository:
+    ref: <OCI Repository URL>
 ```
 
 ```yaml
@@ -203,7 +205,7 @@ All resources are cluster-scoped in the shoot cluster.
 apiVersion: diki.gardener.cloud/v1alpha1
 kind: ComplianceScan
 metadata:
-  name: example-compliancescan
+  name: example
 spec:
   dikiVersion: v0.24 # defaults to latest available minor version
   rulesets:
@@ -332,8 +334,7 @@ resources are retained.
 Runs on the seed as a standard Gardener extension controller. Responsibilities:
 
 - Watch `Extension` objects of type `diki`.
-- Deploy the `diki-operator` and `diki-admission-controller` into the shoot's
-  seed namespace.
+- Deploy the `diki-operator` to the shoot's seed namespace.
 - Apply CRDs, RBAC, and additional resources to the shoot cluster via
   `ManagedResource`.
 
@@ -347,12 +348,6 @@ Runs in the shoot's seed namespace. Responsibilities:
 - Launch `diki-run` Jobs in the shoot's seed namespace to execute scans.
 - Watch `ComplianceScan` status for scan completion (status is written by the
   `diki-run` Job).
-
-#### diki-admission-controller
-
-Runs as part of the `diki-operator`.
-Responsibilities:
-
 - Validate `ComplianceScan`, `ReportOutput`, and `ScheduledComplianceScan`
 - Apply defaults.
 
@@ -367,7 +362,7 @@ results back to the `ComplianceScan` status. Structure:
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: diki-run-example-compliancescan
+  name: diki-run-example
 spec:
   template:
     spec:
@@ -416,7 +411,7 @@ references).
 
 | Phase | Behaviour |
 |-------|-----------|
-| Reconcile | Deploys `diki-operator` and diki-admission-controller to the shoot namespace on the seed. Creates a `ManagedResource` with CRDs, RBAC, and supporting resources for the shoot cluster. Waits for `ManagedResource` health before marking the `Extension` as reconciled. |
+| Reconcile | Deploys `diki-operator` to the shoot namespace on the seed. Creates a `ManagedResource` with CRDs, RBAC, and supporting resources for the shoot cluster. Waits for `ManagedResource` health before marking the `Extension` as reconciled. |
 | Delete | Deletes the `diki-operator` deployment and the `ManagedResource`. Waits for all managed objects to be removed from the shoot cluster before completing. |
 | Migrate | During a control-plane migration, running `ComplianceScan`s will be interrupted and marked as failed. The extension controller will recreate the `diki-operator` deployment on the new seed, and the operator will resume normal operation. Scheduled scans will continue to run on the new seed according to their schedule. |
 
@@ -433,11 +428,14 @@ references).
   to users via the API.
 - Persistent storage backends: Add support for PostgreSQL, OpenSearch, and
   ODG as report output destinations, removing the ConfigMap size limitation.
+  Additionally, there should be an option to export to a custom HTTP endpoint.
 - Dashboard integration: Integrate with the Gardener Dashboard to
   visualize compliance scan summary results, and allow users to trigger
   scans from the UI.
 - Report access proxy: Provide an authenticated proxy or server for
   accessing stored compliance reports.
+- Extend the scope of the Diki extension to support the different Gardener
+  scenarios (e.g. seed cluster, garden cluster, etc.) and not only shoot clusters.
 
 ## Drawbacks
 
