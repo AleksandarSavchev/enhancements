@@ -144,14 +144,48 @@ and exports detailed reports to the configured report outputs.
 |------|-----------|--------|------------|
 | `diki-operator` API changes during development | High | Medium | The extension will track the operator's API as it stabilizes. CRD versioning (`v1alpha1`) signals instability to users. |
 | Scan Jobs consume excessive seed resources | Medium | Low | The `diki-operator` creates one `diki-run` Job per scan. `ScheduledComplianceScan` history limits (`successfulScansHistoryLimit`, `failedScansHistoryLimit`) bound the number of retained scan resources. Concurrent Jobs can be limited. |
+| ConfigMap-based report output may strain etcd for large clusters | Medium | Medium | ConfigMap output is intended as a simple solution for small clusters. Reports are compressed (gzip + base64) to stay within the 1 MB etcd limit. For larger clusters, external outputs (e.g., PostgreSQL, OpenSearch) should be used. |
 | CRDs in shoot clusters add API surface users may not expect | Low | Low | CRDs are only installed when the extension is explicitly enabled on the shoot. |
 
 ## Design Details
 
 ### Extension Registration
 
-The extension is registered via `ControllerDeployment` and
-`ControllerRegistration`:
+The extension is installed as Gardener resources:
+
+Either as `Extension`
+
+```yaml
+apiVersion: operator.gardener.cloud/v1alpha1
+kind: Extension
+metadata:
+  name: gardener-extension-diki
+spec:
+  deployment:
+    admission:
+      runtimeCluster:
+        helm:
+          ociRepository:
+            ref: <admission runtime chart OCI URL>
+      virtualCluster:
+        helm:
+          ociRepository:
+            ref: <admission virtual chart OCI URL>
+    extension:
+      helm:
+        ociRepository:
+          ref: <extension chart OCI URL>
+  resources:
+    - kind: Extension
+      type: diki
+      globallyEnabled: false
+      lifecycle:
+        reconcile: AfterKubeAPIServer
+        migrate: AfterKubeAPIServer
+        delete: BeforeKubeAPIServer
+```
+
+or as `ControllerDeployment` and `ControllerRegistration`.
 
 ```yaml
 apiVersion: core.gardener.cloud/v1
@@ -302,8 +336,8 @@ metadata:
   name: weekly-compliance-scan
 spec:
   schedule: "0 0 * * 0" # cron expression, defaults to weekly on Sunday at midnight
-  successfulScansHistoryLimit: 3
-  failedScansHistoryLimit: 1
+  successfulScansHistoryLimit: 1
+  failedScansHistoryLimit: 3
   scanTemplate:
     spec:
       dikiVersion: v0.22
@@ -334,7 +368,8 @@ resources are retained.
 Runs on the seed as a standard Gardener extension controller. Responsibilities:
 
 - Watch `Extension` objects of type `diki`.
-- Deploy the `diki-operator` to the shoot's seed namespace.
+- Deploy the `diki-operator` to the shoot's seed namespace via
+  `ManagedResource`.
 - Apply CRDs, RBAC, and additional resources to the shoot cluster via
   `ManagedResource`.
 
@@ -348,6 +383,7 @@ Runs in the shoot's seed namespace. Responsibilities:
 - Launch `diki-run` Jobs in the shoot's seed namespace to execute scans.
 - Watch `ComplianceScan` status for scan completion (status is written by the
   `diki-run` Job).
+- Update `ComplianceScan` phase on failed execution and scan completion.
 - Validate `ComplianceScan`, `ReportOutput`, and `ScheduledComplianceScan`
 - Apply defaults.
 
@@ -426,8 +462,9 @@ references).
   a design that is deferred to a future iteration.
 - Version management: Expose available Diki versions and ruleset versions
   to users via the API.
-- Persistent storage backends: Add support for PostgreSQL, OpenSearch, and
-  ODG as report output destinations, removing the ConfigMap size limitation.
+- Persistent storage backends: Add support for [PostgreSQL](https://www.postgresql.org/),
+  [OpenSearch](https://opensearch.org/), and [ODG](https://github.com/open-component-model/open-delivery-gear)
+  as report output destinations, removing the ConfigMap size limitation.
   Additionally, there should be an option to export to a custom HTTP endpoint.
 - Dashboard integration: Integrate with the Gardener Dashboard to
   visualize compliance scan summary results, and allow users to trigger
@@ -441,7 +478,7 @@ references).
 
 - Dependency on an in-development operator. The `diki-operator` is under
   active development and its APIs are not yet stable. This can cause breaking
-  changes across versions.
+  changes across versions and slow down development of the extension.
 
 - CRD footprint in shoot clusters. Enabling the extension adds three CRDs
   to the shoot cluster API surface. While these are only installed on opt-in,
