@@ -1,33 +1,5 @@
 # GEP-63: Diki Extension
 
-## Table of Contents
-
-- [GEP-63: Diki Extension](#gep-63-diki-extension)
-  - [Table of Contents](#table-of-contents)
-  - [Summary](#summary)
-  - [Motivation](#motivation)
-    - [Goals](#goals)
-    - [Non-Goals](#non-goals)
-  - [Proposal](#proposal)
-    - [Notes/Constraints/Caveats](#notesconstraintscaveats)
-    - [Risks and Mitigations](#risks-and-mitigations)
-  - [Design Details](#design-details)
-    - [Extension Registration](#extension-registration)
-    - [API](#api)
-      - [ComplianceScan](#compliancescan)
-      - [ReportOutput](#reportoutput)
-      - [ScheduledComplianceScan](#scheduledcompliancescan)
-    - [Components](#components)
-      - [diki-extension-controller](#diki-extension-controller)
-      - [diki-operator](#diki-operator)
-      - [diki-run](#diki-run)
-    - [Lifecycle Management](#lifecycle-management)
-  - [Future Enhancements](#future-enhancements)
-  - [Drawbacks](#drawbacks)
-  - [Alternatives](#alternatives)
-    - [Central Compliance Service in a Dedicated Cluster](#central-compliance-service-in-a-dedicated-cluster)
-    - [Trivy Operator for Compliance Scanning](#trivy-operator-for-compliance-scanning)
-
 ## Summary
 
 [Diki](https://github.com/gardener/diki) is a compliance checker that evaluates
@@ -74,10 +46,10 @@ Kubernetes resource semantics.
 
 -  Introduce `gardener-extension-diki` as a Gardener extension
    that deploys the `diki-operator` into shoot control planes on seeds.
--  Allow shoot users to run on-demand compliance scans by creating a
-   `ComplianceScan` custom resource in their shoot cluster.
--  Allow shoot users to schedule recurring compliance scans via a
-   `ScheduledComplianceScan` custom resource.
+-  Allow shoot, seed, and garden users to run on-demand compliance scans by
+   creating a `ComplianceScan` custom resource in their cluster.
+-  Allow shoot, seed, and garden users to schedule recurring compliance scans
+   via a `ScheduledComplianceScan` custom resource.
 -  Provide scan result summaries in the `ComplianceScan` status, including
    per-ruleset pass/fail counts and references to detailed report outputs.
 -  Support configurable report outputs via the `ReportOutput` custom resource.
@@ -179,6 +151,10 @@ spec:
     - kind: Extension
       type: diki
       globallyEnabled: false
+      clusterCompatibility:
+        - shoot
+        - seed
+        - garden
       lifecycle:
         reconcile: AfterKubeAPIServer
         migrate: AfterKubeAPIServer
@@ -207,6 +183,10 @@ spec:
     - kind: Extension
       type: diki
       globallyEnabled: false
+      clusterCompatibility:
+        - shoot
+        - seed
+        - garden
       lifecycle:
         reconcile: AfterKubeAPIServer
         delete: BeforeKubeAPIServer
@@ -227,6 +207,29 @@ spec:
   extensions:
   - type: diki
 ```
+
+### Cluster Compatibility
+
+The extension declares `clusterCompatibility` for shoot, seed, and garden
+clusters. The behaviour per cluster type is as follows:
+
+- Shoot: The extension deploys the `diki-operator` into the shoot's namespace
+  on the seed. CRDs and RBAC are applied to the shoot cluster. Scans evaluate
+  only the data plane. This is the initial implementation target.
+- Seed: Works analogously to shoot. The extension deploys the `diki-operator`
+  and applies CRDs and RBAC to the seed cluster. Scans evaluate both the
+  control plane and the data plane of the seed.
+- Garden: Both the runtime cluster and the virtual garden cluster are
+  examined. The CRDs (`ComplianceScan`, `ReportOutput`, `ScheduledComplianceScan`)
+  are located in the runtime cluster. The `diki-operator` runs scans against
+  both the runtime and virtual garden API servers, evaluating both the
+  control plane and the data plane.
+
+The initial release focuses on shoot cluster support. Seed and garden cluster
+support will follow in subsequent iterations without requiring changes to the
+extension registration or architecture. This GEP focuses on the shoot
+implementation; seed and garden specifics will be detailed in a future GEP
+or amendment.
 
 ### API
 
@@ -471,8 +474,10 @@ references).
   scans from the UI.
 - Report access proxy: Provide an authenticated proxy or server for
   accessing stored compliance reports.
-- Extend the scope of the Diki extension to support the different Gardener
-  scenarios (e.g. seed cluster, garden cluster, etc.) and not only shoot clusters.
+- Seed and garden cluster scans: Implement the extension reconciliation logic
+  for seed and garden cluster types. The extension registration already declares
+  compatibility (see [Cluster Compatibility](#cluster-compatibility)), but
+  support for these cluster types is deferred to a future iteration.
 
 ## Drawbacks
 
