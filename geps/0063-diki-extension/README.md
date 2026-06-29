@@ -485,11 +485,6 @@ references).
   active development and its APIs are not yet stable. This can cause breaking
   changes across versions and slow down development of the extension.
 
-- CRD footprint in shoot clusters. Enabling the extension adds three CRDs
-  to the shoot cluster API surface. While these are only installed on opt-in,
-  users may find the additional API types unexpected if they do not actively use
-  compliance scanning.
-
 ## Alternatives
 
 ### Central Compliance Service in a Dedicated Cluster
