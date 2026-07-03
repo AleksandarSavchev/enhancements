@@ -16,7 +16,7 @@ that allow shoot users to run on-demand and scheduled compliance scans
 declaratively, with summary results reported directly in resource status fields.
 The extension follows the standard Gardener extension contract
 (`ControllerRegistration`, `ManagedResource`-based deployment, admission
-webhooks) and keeps the compliance workload inside the seed, avoiding
+webhooks) and keeps the extension workload inside the seed, avoiding
 privileged components in the shoot data plane.
 
 ## Motivation
@@ -30,6 +30,8 @@ places the full operational burden on each user:
 
 - Manual scheduling: Users must set up their own cron jobs or CI pipelines
   to trigger scans on a recurring basis.
+- Version management: Users must track Diki CLI releases and update
+  their installations themselves.
 - Configuration management: Each user independently manages Diki
   configuration files, ruleset versions, and rule options.
 - Report collection and storage: Scan results are local JSON files that
@@ -98,9 +100,13 @@ and exports detailed reports to the configured report outputs.
   may change as the implementation matures. The GEP captures the target design.
 
 - Scan execution happens on the seed, not in the shoot data plane. The
-  `diki-run` Job runs in the shoot's namespace on the seed. It would need
+  `diki-run` Job runs in the shoot's namespace on the seed. It needs
   a shoot access secret with the required
-  [RBAC permissions for a Diki scan](https://github.com/gardener/diki/blob/main/example/rbac/managedk8s.yaml).
+  [RBAC permissions for a Diki scan](https://github.com/gardener/diki/blob/main/example/rbac/managedk8s.yaml)
+  to access the shoot API server. If scan rules need to read the
+  `extensions.gardener.cloud/v1alpha1.Cluster` resource (e.g., for
+  Gardener-specific rulesets), the Job would additionally require access
+  to the seed API server.
   Additional permissions/credentials would be required, depending on the
   configured outputs (e.g., credentials to write to a PostgreSQL database).
 
@@ -116,7 +122,7 @@ and exports detailed reports to the configured report outputs.
 |------|-----------|--------|------------|
 | `diki-operator` API changes during development | High | Medium | The extension will track the operator's API as it stabilizes. CRD versioning (`v1alpha1`) signals instability to users. |
 | Scan Jobs consume excessive seed resources | Medium | Low | The `diki-operator` creates one `diki-run` Job per scan. `ScheduledComplianceScan` history limits (`successfulScansHistoryLimit`, `failedScansHistoryLimit`) bound the number of retained scan resources. Concurrent Jobs can be limited. |
-| ConfigMap-based report output may strain etcd for large clusters | Medium | Medium | ConfigMap output is intended as a simple solution for small clusters. Reports are compressed (gzip + base64) to stay within the 1 MB etcd limit. For larger clusters, external outputs (e.g., PostgreSQL, OpenSearch) should be used. |
+| ConfigMap-based report output may strain etcd for large clusters | Medium | Medium | ConfigMap output is intended as a simple solution for small clusters. Reports are compressed (gzip) and stored via `BinaryData` to stay within the 1 MB etcd limit. For larger clusters, external outputs (e.g., PostgreSQL, OpenSearch) should be used. |
 | CRDs in shoot clusters add API surface users may not expect | Low | Low | CRDs are only installed when the extension is explicitly enabled on the shoot. |
 
 ## Design Details
@@ -195,8 +201,8 @@ spec:
       - name: gardener-extension-diki
 ```
 
-The extension controller is deployed per seed and watches `Extension` objects of
-type `diki`.
+The extension controller is deployed per seed and watches
+`extensions.gardener.cloud/v1alpha1.Extension` objects of type `diki`.
 
 Shoot owners enable the extension by adding it to their Shoot spec:
 
@@ -216,14 +222,17 @@ clusters. The behaviour per cluster type is as follows:
 - Shoot: The extension deploys the `diki-operator` into the shoot's namespace
   on the seed. CRDs and RBAC are applied to the shoot cluster. Scans evaluate
   only the data plane. This is the initial implementation target.
-- Seed: Works analogously to shoot. The extension deploys the `diki-operator`
-  and applies CRDs and RBAC to the seed cluster. Scans evaluate both the
-  control plane and the data plane of the seed.
+- Seed (ManagedSeed): Works analogously to shoot. The extension deploys the
+  `diki-operator` in the control plane namespace and applies CRDs and RBAC to the
+  cluster. Scans evaluate both the control plane and the data plane of the seed.
+- Seed (Soil): The `diki-operator` is installed in the `garden` namespace of
+  the soil. CRDs and RBAC are applied to the soil cluster. Scans evaluate
+  the data plane.
 - Garden: Both the runtime cluster and the virtual garden cluster are
   examined. The CRDs (`ComplianceScan`, `ReportOutput`, `ScheduledComplianceScan`)
-  are located in the runtime cluster. The `diki-operator` runs scans against
-  both the runtime and virtual garden API servers, evaluating both the
-  control plane and the data plane.
+  are located in the runtime cluster. A single `ComplianceScan` can be
+  configured to scan both the runtime and virtual garden clusters. The
+  human operator decides how scans are configured.
 
 The initial release focuses on shoot cluster support. Seed and garden cluster
 support will follow in subsequent iterations without requiring changes to the
@@ -263,6 +272,10 @@ spec:
       version: v0.1.0
   outputs:
   - name: example-configmap-output
+  - name: example-postgresql-output
+  - name: example-opensearch-output
+    optional: true # default: false
+  - name: example-webhook-output
 status:
   phase: Running # Pending | Running | Completed | Failed
   conditions:
@@ -279,6 +292,26 @@ status:
       configMapRef:
         name: compliance-scan-report-njdjv
         namespace: kube-system
+  - outputName: example-postgresql-output
+    phase: Completed
+    details:
+      postgresRef:
+        url: "postgres.example.com:5432"
+        database: "diki_reports"
+        table: "compliance_reports"
+        recordId: "a3f1c9e7-4b2d-4e8a-9f1c-3d5e7a9b1c2d"
+  - outputName: example-opensearch-output
+    phase: Completed
+    details:
+      openSearchRef:
+        url: "https://opensearch.example.com:9200"
+        index: "diki-compliance-reports"
+        documentId: "a3f1c9e7-4b2d-4e8a-9f1c-3d5e7a9b1c2d"
+  - outputName: example-webhook-output
+    phase: Completed
+    details:
+      webhookRef:
+        url: "https://compliance-api.corp.example.com/v1/reports"
   rulesets:
   - id: disa-kubernetes-stig
     version: v2r4
@@ -303,7 +336,10 @@ Its spec is immutable after creation. The `spec.rulesets` field allows users to
 select which rulesets to include and at which version; it defaults to all
 available rulesets at their latest versions. Ruleset and rule options are
 supplied via `ConfigMap` references. The `spec.outputs` field references
-`ReportOutput` resources that define where detailed reports are stored.
+`ReportOutput` resources that define where detailed reports are stored. Each
+output entry has an `optional` field (defaults to `false`). A scan is considered
+successful only if all non-optional outputs accept the report; failures on
+optional outputs do not fail the scan.
 
 The `status` section is updated by the `diki-run` Job as the scan progresses.
 On completion, `status.rulesets[].results` contains per-ruleset summaries and
@@ -329,6 +365,78 @@ compliance reports. It is immutable and can be referenced by multiple
 `ComplianceScan` resources. Each `ReportOutput` defines exactly one output
 type. The initial implementation supports `ConfigMap`-based output; additional
 outputs will be added in future iterations (e.g., PostgreSQL, OpenSearch).
+
+> [!NOTE]
+> ConfigMap report outputs have an `ownerReference` to the originating
+> `ComplianceScan` and are automatically deleted when the `ComplianceScan` is
+> removed. Reports stored in external systems (e.g., PostgreSQL, OpenSearch)
+> are not cleaned up and remain as-is.
+
+#### Example ReportOutput for PostgreSQL
+
+```yaml
+apiVersion: diki.gardener.cloud/v1alpha1
+kind: ReportOutput
+metadata:
+  name: example-postgresql-output
+spec:
+  output:
+    postgresql:
+      url: "postgres.garden.svc:5432"
+      database: "diki_reports"
+      table: "compliance_reports"
+      secretRef:
+        name: postgresql-credentials
+        namespace: kube-system
+      tls:
+        enabled: true
+        caSecretRef:
+          name: postgresql-ca
+          namespace: kube-system
+```
+
+#### Example ReportOutput for OpenSearch
+
+```yaml
+apiVersion: diki.gardener.cloud/v1alpha1
+kind: ReportOutput
+metadata:
+  name: example-opensearch-output
+spec:
+  output:
+    openSearch:
+      url: "https://opensearch.garden.svc:9200"
+      index: "diki-compliance-reports"
+      secretRef:
+        name: opensearch-credentials
+        namespace: kube-system
+      tls:
+        enabled: true
+        caSecretRef:
+          name: opensearch-ca
+          namespace: kube-system
+```
+
+#### Example ReportOutput for Webhook (custom HTTP endpoint)
+
+```yaml
+apiVersion: diki.gardener.cloud/v1alpha1
+kind: ReportOutput
+metadata:
+  name: example-webhook-output
+spec:
+  output:
+    webhook:
+      url: "https://compliance-api.corp.example.com/v1/reports"
+      headerSecretRef:
+        name: webhook-headers
+        namespace: kube-system
+      tls:
+        enabled: true
+        caSecretRef:
+          name: webhook-ca
+          namespace: kube-system
+```
 
 #### ScheduledComplianceScan
 
@@ -360,7 +468,9 @@ The `ScheduledComplianceScan` resource allows users to define recurring
 compliance scans following the `CronJob`/`Job` pattern. The operator creates
 `ComplianceScan` resources according to the cron schedule and manages their
 lifecycle. History limits control how many completed and failed `ComplianceScan`
-resources are retained.
+resources are retained. The operator can apply a random jitter (up to 15 minutes)
+to the scheduled time to avoid peak load when multiple scans are scheduled at
+the same time.
 
 ### Components
 
@@ -451,7 +561,7 @@ references).
 | Phase | Behaviour |
 |-------|-----------|
 | Reconcile | Deploys `diki-operator` to the shoot namespace on the seed. Creates a `ManagedResource` with CRDs, RBAC, and supporting resources for the shoot cluster. Waits for `ManagedResource` health before marking the `Extension` as reconciled. |
-| Delete | Deletes the `diki-operator` deployment and the `ManagedResource`. Waits for all managed objects to be removed from the shoot cluster before completing. |
+| Delete | Deletes the `diki-operator` deployment and the `ManagedResource`. This includes the CRDs, which triggers cascade deletion of all `ComplianceScan`, `ReportOutput`, and `ScheduledComplianceScan` custom resources. Waits for all managed objects to be removed from the shoot cluster before completing. |
 | Migrate | During a control-plane migration, running `ComplianceScan`s will be interrupted and marked as failed. The extension controller will recreate the `diki-operator` deployment on the new seed, and the operator will resume normal operation. Scheduled scans will continue to run on the new seed according to their schedule. |
 
 ## Future Enhancements
