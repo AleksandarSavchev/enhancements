@@ -385,7 +385,9 @@ spec:
       url: "postgres.garden.svc:5432"
       database: "diki_reports"
       table: "compliance_reports"
-      secretRef:
+      credentialsRef:
+        apiVersion: v1
+        kind: Secret
         name: postgresql-credentials
         namespace: kube-system
       tls:
@@ -393,6 +395,7 @@ spec:
         caSecretRef:
           name: postgresql-ca
           namespace: kube-system
+          key: ca.crt
 ```
 
 #### Example ReportOutput for OpenSearch
@@ -407,7 +410,9 @@ spec:
     openSearch:
       url: "https://opensearch.garden.svc:9200"
       index: "diki-compliance-reports"
-      secretRef:
+      credentialsRef:
+        apiVersion: v1
+        kind: Secret
         name: opensearch-credentials
         namespace: kube-system
       tls:
@@ -415,6 +420,7 @@ spec:
         caSecretRef:
           name: opensearch-ca
           namespace: kube-system
+          key: ca.crt
 ```
 
 #### Example ReportOutput for Webhook (custom HTTP endpoint)
@@ -428,7 +434,9 @@ spec:
   output:
     webhook:
       url: "https://compliance-api.corp.example.com/v1/reports"
-      headerSecretRef:
+      credentialsRef:
+        apiVersion: v1
+        kind: Secret
         name: webhook-headers
         namespace: kube-system
       tls:
@@ -436,6 +444,7 @@ spec:
         caSecretRef:
           name: webhook-ca
           namespace: kube-system
+          key: ca.crt
 ```
 
 #### ScheduledComplianceScan
