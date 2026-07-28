@@ -129,90 +129,19 @@ and exports detailed reports to the configured report outputs.
 
 ### Extension Registration
 
-The extension is installed as Gardener resources:
+The extension is registered either via the `Extension` resource
+or via `ControllerDeployment` and `ControllerRegistration`.
 
-Either as `Extension`
+Key properties:
 
-```yaml
-apiVersion: operator.gardener.cloud/v1alpha1
-kind: Extension
-metadata:
-  name: gardener-extension-diki
-spec:
-  deployment:
-    admission:
-      runtimeCluster:
-        helm:
-          ociRepository:
-            ref: <admission runtime chart OCI URL>
-      virtualCluster:
-        helm:
-          ociRepository:
-            ref: <admission virtual chart OCI URL>
-    extension:
-      helm:
-        ociRepository:
-          ref: <extension chart OCI URL>
-  resources:
-    - kind: Extension
-      type: diki
-      globallyEnabled: false
-      clusterCompatibility:
-        - shoot
-        - seed
-        - garden
-      lifecycle:
-        reconcile: AfterKubeAPIServer
-        migrate: AfterKubeAPIServer
-        delete: BeforeKubeAPIServer
-```
-
-or as `ControllerDeployment` and `ControllerRegistration`.
-
-```yaml
-apiVersion: core.gardener.cloud/v1
-kind: ControllerDeployment
-metadata:
-  name: gardener-extension-diki
-helm:
-  ociRepository:
-    ref: <OCI Repository URL>
-```
-
-```yaml
-apiVersion: core.gardener.cloud/v1beta1
-kind: ControllerRegistration
-metadata:
-  name: diki
-spec:
-  resources:
-    - kind: Extension
-      type: diki
-      globallyEnabled: false
-      clusterCompatibility:
-        - shoot
-        - seed
-        - garden
-      lifecycle:
-        reconcile: AfterKubeAPIServer
-        delete: BeforeKubeAPIServer
-  deployment:
-    deploymentRefs:
-      - name: gardener-extension-diki
-```
+- The extension supports all three cluster types: `garden`, `seed`, and `shoot`.
+- The lifecycle policy is `AfterKubeAPIServer` for reconcile and migrate
+  operations and `BeforeKubeAPIServer` for delete operations.
+- The extension is not globally enabled; shoot owners opt in by adding
+  `type: diki` to `.spec.extensions[]` in their Shoot manifest.
 
 The extension controller is deployed per seed and watches
 `extensions.gardener.cloud/v1alpha1.Extension` objects of type `diki`.
-
-Shoot owners enable the extension by adding it to their Shoot spec:
-
-```yaml
-apiVersion: core.gardener.cloud/v1beta1
-kind: Shoot
-spec:
-  extensions:
-  - type: diki
-```
 
 ### Cluster Compatibility
 
@@ -222,12 +151,11 @@ clusters. The behaviour per cluster type is as follows:
 - Shoot: The extension deploys the `diki-operator` into the shoot's namespace
   on the seed. CRDs and RBAC are applied to the shoot cluster. Scans evaluate
   only the data plane. This is the initial implementation target.
-- Seed (ManagedSeed): Works analogously to shoot. The extension deploys the
-  `diki-operator` in the control plane namespace and applies CRDs and RBAC to the
-  cluster. Scans evaluate both the control plane and the data plane of the seed.
-- Seed (Soil): The `diki-operator` is installed in the `garden` namespace of
-  the soil. CRDs and RBAC are applied to the soil cluster. Scans evaluate
-  the data plane.
+- Seed: The `diki-operator` is deployed in the `garden` namespace of the seed.
+  CRDs and RBAC are applied to the seed cluster. Scans evaluate the data plane.
+  For seeds backed by `ManagedSeeds`, operators may prefer enabling the extension
+  on the backing shoot instead, that would additionally include a control plane
+  scan.
 - Garden: Both the runtime cluster and the virtual garden cluster are
   examined. The CRDs (`ComplianceScan`, `ReportOutput`, `ScheduledComplianceScan`)
   are located in the runtime cluster. A single `ComplianceScan` can be
@@ -456,6 +384,7 @@ metadata:
   name: weekly-compliance-scan
 spec:
   schedule: "0 0 * * 0" # cron expression, defaults to weekly on Sunday at midnight
+  timeZone: "Etc/UTC" # optional, defaults the diki-operator's local timezone
   successfulScansHistoryLimit: 1
   failedScansHistoryLimit: 3
   scanTemplate:
@@ -641,7 +570,3 @@ This approach was rejected because:
   can evaluate rules in this context. Trivy Operator treats every cluster
   as a generic Kubernetes installation.
 - Trivy Operator does not support the DISA Kubernetes STIG ruleset.
-- No control over the upstream Trivy project. Diki is part of the Gardener
-  organization, giving the team full control over its development,
-  prioritization of Gardener-specific features, and long-term stability
-  guarantees.
