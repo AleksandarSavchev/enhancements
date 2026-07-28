@@ -160,7 +160,10 @@ clusters. The behaviour per cluster type is as follows:
   examined. The CRDs (`ComplianceScan`, `ReportOutput`, `ScheduledComplianceScan`)
   are located in the runtime cluster. A single `ComplianceScan` can be
   configured to scan both the runtime and virtual garden clusters. The
-  human operator decides how scans are configured.
+  human operator decides how scans are configured. If the garden runtime
+  cluster also serves as a seed, the garden extension instance takes priority
+  as it covers both the runtime cluster workload (equivalent to a seed scan)
+  and the virtual garden.
 
 The initial release focuses on shoot cluster support. Seed and garden cluster
 support will follow in subsequent iterations without requiring changes to the
