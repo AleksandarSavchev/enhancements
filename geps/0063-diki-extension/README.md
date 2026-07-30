@@ -47,7 +47,8 @@ Kubernetes resource semantics.
 ### Goals
 
 -  Introduce `gardener-extension-diki` as a Gardener extension
-   that deploys the `diki-operator` into shoot control planes on seeds.
+   that deploys the `diki-operator` into shoot control planes on seeds,
+   into the `garden` namespace on seeds, and into the garden runtime cluster.
 -  Allow shoot, seed, and garden users to run on-demand compliance scans by
    creating a `ComplianceScan` custom resource in their cluster.
 -  Allow shoot, seed, and garden users to schedule recurring compliance scans
@@ -100,8 +101,11 @@ and exports detailed reports to the configured report outputs.
   may change as the implementation matures. The GEP captures the target design.
 
 - Scan execution happens on the seed, not in the shoot data plane. The
-  `diki-run` Job runs in the shoot's namespace on the seed. It needs
-  a shoot access secret with the required
+  `diki-run` Job runs in the shoot's namespace on the seed. Running scan
+  Jobs on the seed rather than in the shoot avoids exposing report output
+  credentials (e.g., for a globally preconfigured export destination) to
+  shoot users, and allows scans to run against workerless shoots that have
+  no data plane nodes. The Job needs a shoot access secret with the required
   [RBAC permissions for a Diki scan](https://github.com/gardener/diki/blob/main/example/rbac/managedk8s.yaml)
   to access the shoot API server. If scan rules need to read the
   `extensions.gardener.cloud/v1alpha1.Cluster` resource (e.g., for
